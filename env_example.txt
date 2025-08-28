@@ -1,0 +1,23 @@
+# OpenAI Configuration
+OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_MODEL=gpt-4o-mini
+EMBEDDING_MODEL=text-embedding-ada-002
+
+# Vector Database Configuration
+VECTOR_DB_TYPE=chroma
+CHROMA_PERSIST_DIRECTORY=./chroma_db
+
+# Text Processing Configuration
+CHUNK_SIZE=1000
+CHUNK_OVERLAP=200
+
+# File Paths
+TEXTBOOKS_DIR=./textbooks
+OUTPUT_DIR=./output
+
+# Retrieval Configuration
+TOP_K_RESULTS=5
+
+# LLM Configuration
+MAX_TOKENS=1000
+TEMPERATURE=0.7
