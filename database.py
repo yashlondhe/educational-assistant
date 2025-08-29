@@ -115,12 +115,54 @@ class Database:
                 )
             """)
             
+            # User conversation history table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_conversation_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    session_id TEXT NOT NULL,
+                    compressed_summary TEXT NOT NULL,
+                    question_count INTEGER DEFAULT 0,
+                    topics TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    compression_level TEXT DEFAULT 'none',
+                    key_concepts TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # User learning profiles table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_learning_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER UNIQUE NOT NULL,
+                    profile_data TEXT NOT NULL,
+                    topic_mastery TEXT,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Session compression status table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS session_compression_status (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT UNIQUE NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    compression_level TEXT NOT NULL,
+                    last_compressed TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    file_path TEXT,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            
             # Create indices for better performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_subjects_class ON subjects(class_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_textbooks_subject ON textbooks(subject_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_selections_user ON user_selections(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_textbooks_user ON user_selected_textbooks(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_history ON user_conversation_history(user_id, timestamp DESC)")
             
             conn.commit()
             logger.info("Database initialized successfully")
@@ -374,3 +416,117 @@ class Database:
                 all_paths.append(book['file_path'])
         
         return all_paths
+    
+    # Conversation history methods
+    def save_conversation_history(self, user_id: int, session_id: str, 
+                                compressed_summary: str, question_count: int, 
+                                topics: List[str], compression_level: str = 'none',
+                                key_concepts: List[str] = None) -> int:
+        """Save compressed conversation history."""
+        topics_json = json.dumps(topics) if topics else None
+        key_concepts_json = json.dumps(key_concepts) if key_concepts else None
+        query = """
+            INSERT INTO user_conversation_history 
+            (user_id, session_id, compressed_summary, question_count, topics, 
+             compression_level, key_concepts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """
+        return self.execute_insert(query, (user_id, session_id, compressed_summary, 
+                                          question_count, topics_json, 
+                                          compression_level, key_concepts_json))
+    
+    def get_recent_conversation_history(self, user_id: int, limit: int = 5) -> List[Dict]:
+        """Get recent conversation history for a user."""
+        query = """
+            SELECT * FROM user_conversation_history 
+            WHERE user_id = ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        """
+        results = self.execute_query(query, (user_id, limit))
+        # Parse JSON fields
+        for result in results:
+            if result.get('topics'):
+                result['topics'] = json.loads(result['topics'])
+            if result.get('key_concepts'):
+                result['key_concepts'] = json.loads(result['key_concepts'])
+        return results
+    
+    def get_conversation_history_count(self, user_id: int) -> int:
+        """Get total number of conversation histories for a user."""
+        query = "SELECT COUNT(*) as count FROM user_conversation_history WHERE user_id = ?"
+        results = self.execute_query(query, (user_id,))
+        return results[0]['count'] if results else 0
+    
+    # Learning profile methods
+    def save_or_update_learning_profile(self, user_id: int, profile_data: Dict, 
+                                      topic_mastery: Dict) -> bool:
+        """Save or update user learning profile."""
+        profile_json = json.dumps(profile_data)
+        mastery_json = json.dumps(topic_mastery)
+        
+        # Try update first
+        query = """
+            UPDATE user_learning_profiles 
+            SET profile_data = ?, topic_mastery = ?, last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+        """
+        rows_affected = self.execute_update(query, (profile_json, mastery_json, user_id))
+        
+        if rows_affected == 0:
+            # Insert if no existing profile
+            query = """
+                INSERT INTO user_learning_profiles (user_id, profile_data, topic_mastery)
+                VALUES (?, ?, ?)
+            """
+            self.execute_insert(query, (user_id, profile_json, mastery_json))
+        
+        return True
+    
+    def get_learning_profile(self, user_id: int) -> Optional[Dict]:
+        """Get user learning profile."""
+        query = "SELECT * FROM user_learning_profiles WHERE user_id = ?"
+        results = self.execute_query(query, (user_id,))
+        if results:
+            result = results[0]
+            result['profile_data'] = json.loads(result['profile_data'])
+            result['topic_mastery'] = json.loads(result['topic_mastery']) if result['topic_mastery'] else {}
+            return result
+        return None
+    
+    # Compression status methods
+    def save_compression_status(self, session_id: str, user_id: int, 
+                              compression_level: str, file_path: str = None) -> int:
+        """Save or update session compression status."""
+        query = """
+            INSERT INTO session_compression_status (session_id, user_id, compression_level, file_path)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+                compression_level = ?,
+                last_compressed = CURRENT_TIMESTAMP,
+                file_path = ?
+        """
+        return self.execute_insert(query, (session_id, user_id, compression_level, file_path,
+                                         compression_level, file_path))
+    
+    def get_sessions_by_compression_level(self, user_id: int, compression_level: str) -> List[Dict]:
+        """Get sessions by compression level."""
+        query = """
+            SELECT * FROM session_compression_status 
+            WHERE user_id = ? AND compression_level = ?
+            ORDER BY last_compressed DESC
+        """
+        return self.execute_query(query, (user_id, compression_level))
+    
+    def get_sessions_for_compression(self, older_than_days: int, 
+                                   current_level: str = 'none') -> List[Dict]:
+        """Get sessions that need compression based on age."""
+        query = """
+            SELECT h.*, s.compression_level, s.file_path
+            FROM user_conversation_history h
+            LEFT JOIN session_compression_status s ON h.session_id = s.session_id
+            WHERE h.timestamp < datetime('now', '-' || ? || ' days')
+            AND (s.compression_level IS NULL OR s.compression_level = ?)
+            ORDER BY h.timestamp ASC
+        """
+        return self.execute_query(query, (older_than_days, current_level))

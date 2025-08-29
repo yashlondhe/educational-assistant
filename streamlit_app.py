@@ -1,11 +1,16 @@
 import streamlit as st
 import os
-import tempfile
 from pathlib import Path
-import time
+from datetime import datetime
+import uuid
 
 from educational_assistant import EducationalAssistant
+from auth import AuthManager, AuthenticationError
+from user_manager import UserManager
+from content_manager import ContentManager
+from database import Database
 from config import Config
+from history_manager import HistoryManager
 
 # Page configuration
 st.set_page_config(
@@ -15,7 +20,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for better styling
+# Custom CSS
 st.markdown("""
 <style>
     .main-header {
@@ -41,333 +46,527 @@ st.markdown("""
         border-radius: 0.5rem;
         border-left: 4px solid #28a745;
     }
-    .source-box {
+    .user-info {
+        background-color: #f8f9fa;
+        padding: 0.8rem;
+        border-radius: 0.5rem;
+        margin-bottom: 1rem;
+    }
+    .selection-box {
         background-color: #fff3cd;
-        padding: 0.5rem;
-        border-radius: 0.3rem;
-        font-size: 0.9rem;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        border-left: 4px solid #ffc107;
+        margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
+# Initialize session state
+def init_session_state():
+    """Initialize session state variables."""
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'user_id' not in st.session_state:
+        st.session_state.user_id = None
+    if 'user_info' not in st.session_state:
+        st.session_state.user_info = None
+    if 'selected_subject' not in st.session_state:
+        st.session_state.selected_subject = None
+    if 'selected_textbooks' not in st.session_state:
+        st.session_state.selected_textbooks = []
+    if 'chat_history' not in st.session_state:
+        st.session_state.chat_history = []
+    if 'session_id' not in st.session_state:
+        st.session_state.session_id = None
+    if 'session_start_time' not in st.session_state:
+        st.session_state.session_start_time = None
+    if 'full_conversation_history' not in st.session_state:
+        st.session_state.full_conversation_history = []
+
 @st.cache_resource
-def initialize_assistant():
-    """Initialize the educational assistant with caching."""
+def initialize_services():
+    """Initialize all services."""
     try:
+        db = Database()
+        auth_manager = AuthManager(db)
+        user_manager = UserManager(db)
+        content_manager = ContentManager(db)
         assistant = EducationalAssistant()
-        return assistant
-    except Exception as e:
-        st.error(f"Failed to initialize assistant: {e}")
-        return None
-
-def upload_textbooks():
-    """Handle textbook uploads."""
-    st.subheader("📚 Upload Textbooks")
-    
-    uploaded_files = st.file_uploader(
-        "Choose textbook files (PDF or TXT)",
-        type=['pdf', 'txt'],
-        accept_multiple_files=True,
-        help="Upload your textbook files. The system will automatically extract grade and subject from filenames."
-    )
-    
-    if uploaded_files:
-        st.write(f"📁 {len(uploaded_files)} files selected")
+        history_manager = HistoryManager(db, assistant.llm_interface)
         
-        # Create temporary directory for uploaded files
-        with tempfile.TemporaryDirectory() as temp_dir:
-            file_paths = []
-            
-            for uploaded_file in uploaded_files:
-                # Save uploaded file to temporary directory
-                file_path = os.path.join(temp_dir, uploaded_file.name)
-                with open(file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
-                file_paths.append(file_path)
-            
-            # Process uploaded files
-            if st.button("🚀 Process and Setup Database", type="primary"):
-                with st.spinner("Processing textbooks..."):
-                    try:
-                        assistant = initialize_assistant()
-                        if assistant:
-                            # Process each file individually
-                            all_documents = []
-                            progress_bar = st.progress(0)
-                            
-                            for i, file_path in enumerate(file_paths):
-                                st.write(f"Processing {os.path.basename(file_path)}...")
-                                
-                                # Extract metadata from filename
-                                filename = os.path.basename(file_path)
-                                grade, subject = assistant._extract_metadata_from_filename(filename)
-                                
-                                # Process the file
-                                documents = assistant.text_processor.process_textbook(
-                                    file_path=file_path,
-                                    grade=grade,
-                                    subject=subject
-                                )
-                                all_documents.extend(documents)
-                                
-                                progress_bar.progress((i + 1) / len(file_paths))
-                            
-                            # Create vector store
-                            st.write("Creating embeddings and storing in database...")
-                            assistant.create_embeddings(all_documents)
-                            
-                            st.success(f"✅ Database setup completed!")
-                            st.info(f"📊 Processed {len(uploaded_files)} files into {len(all_documents)} document chunks")
-                            
-                            # Clear cache to refresh assistant state
-                            st.cache_resource.clear()
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error processing files: {e}")
+        # Initialize content if needed
+        content_manager.initialize_content()
+        
+        return db, auth_manager, user_manager, content_manager, assistant, history_manager
+    except Exception as e:
+        st.error(f"Failed to initialize services: {e}")
+        return None, None, None, None, None, None
 
-def ask_questions(question=None):
-    """Main question-answering interface."""
-    st.subheader("❓ Ask Questions")
-    
-    assistant = initialize_assistant()
-    if not assistant:
-        st.error("Assistant not initialized. Please upload textbooks first.")
-        return
-    
-    # Check database status
-    db_info = assistant.get_database_info()
-    
-    if db_info["status"] != "initialized":
-        st.warning("⚠️ No database found. Please upload and process textbooks first.")
-        return
-    
-    # Display database info
-    with st.expander("📊 Database Information"):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Status", db_info["status"])
-        with col2:
-            st.metric("Documents", db_info.get("documents_count", "Unknown"))
-        with col3:
-            st.metric("Type", db_info["db_type"])
-    
-    # Question input (only if not provided)
-    if question is None:
-        question = st.text_area(
-            "Enter your question:",
-            placeholder="e.g., Explain photosynthesis for Class 6",
-            height=100
-        )
-    
-    # Advanced options
-    with st.expander("⚙️ Advanced Options"):
-        col1, col2 = st.columns(2)
-        with col1:
-            k_results = st.slider("Number of context documents", 1, 5, 2)
-            st.caption("⚠️ Higher values may exceed token limits")
-        with col2:
-            model_choice = st.selectbox(
-                "LLM Model",
-                ["gpt-4o-mini", "gpt-4", ],
-                index=0
-            )
-            st.caption("💡 GPT-4.1-mini has higher rate limits")
-    
-    # Ask question
-    if st.button("🤔 Ask Question", type="primary") and question:
-        with st.spinner("Thinking..."):
-            try:
-                # Debug: Log the question and parameters
-                st.info(f"🔍 Debug: Question: '{question}' | Model: {model_choice} | Context docs: {k_results}")
-                
-                # Update model if different
-                if model_choice != assistant.llm_interface.model_name:
-                    st.info(f"🔄 Switching model from {assistant.llm_interface.model_name} to {model_choice}")
-                    assistant.llm_interface.model_name = model_choice
-                    assistant.llm_interface.llm = assistant.llm_interface.llm.__class__(
-                        model=model_choice,
-                        temperature=assistant.llm_interface.temperature,
-                        max_tokens=assistant.llm_interface.max_tokens,
-                        openai_api_key=Config.OPENAI_API_KEY
-                    )
-                
-                # Debug: Log before calling answer_question
-                st.info("🚀 Calling assistant.answer_question()...")
-                
-                # Create a placeholder for template analysis
-                template_placeholder = st.empty()
-                
-                result = assistant.answer_question(question, k=k_results)
-                
-                # Debug: Log the result
-                st.info(f"✅ Received result: {type(result)} | Keys: {list(result.keys()) if isinstance(result, dict) else 'Not a dict'}")
-                if isinstance(result, dict) and 'answer' in result:
-                    st.info(f"📝 Answer length: {len(result['answer'])} characters")
-                else:
-                    st.error(f"❌ Unexpected result format: {result}")
-                
-                # Display template information
-                if isinstance(result, dict) and 'template_info' in result:
-                    template_info = result['template_info']
-                    st.markdown("### 🔍 Template Analysis")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.info(f"**Question Type:** {template_info['question_type']}")
-                        st.info(f"**Subject:** {template_info['subject']}")
-                        st.info(f"**Grade Level:** {template_info['grade_level']}")
-                        st.info(f"**Complexity:** {template_info['complexity']}")
-                    with col2:
-                        st.info(f"**Template Used:** {template_info['template_used']}")
-                        st.info(f"**Model:** {template_info['model']}")
-                        st.info(f"**Context Docs:** {template_info['context_documents_count']}")
-                        st.info(f"**Keywords:** {', '.join(template_info['keywords'])}")
-                    st.markdown("---")
-                
-                # Display answer
-                st.markdown("### 💡 Answer")
-                
-                # Debug: Show raw answer for troubleshooting
-                if st.checkbox("🔍 Show debug info"):
-                    st.json(result)
-                
-                if result["answer"]:
-                    st.markdown(f'<div class="answer-box">{result["answer"]}</div>', unsafe_allow_html=True)
-                else:
-                    st.error("❌ No answer received from OpenAI")
-                    st.info("This might be due to an API error or empty response")
-                
-                # Display metadata
-                col1, col2, col3, col4 = st.columns(4)
-                with col1:
-                    if result["sources"]:
-                        st.markdown("**📚 Sources:**")
-                        for source in result["sources"]:
-                            st.markdown(f'<div class="source-box">{source}</div>', unsafe_allow_html=True)
-                
-                with col2:
-                    if result["grades"]:
-                        st.markdown("**📖 Grades:**")
-                        st.write(", ".join(result["grades"]))
-                
-                with col3:
-                    if result["subjects"]:
-                        st.markdown("**📝 Subjects:**")
-                        st.write(", ".join(result["subjects"]))
-                
-                with col4:
-                    if "question_analysis" in result:
-                        analysis = result["question_analysis"]
-                        st.markdown("**🔍 Analysis:**")
-                        st.write(f"Type: {analysis['type']}")
-                        st.write(f"Subject: {analysis['subject']}")
-                        st.write(f"Grade: {analysis['grade_level']}")
-                        st.write(f"Complexity: {analysis['complexity']}")
-                
-                # Show context documents (expandable)
-                if result["context_documents_count"] > 0:
-                    with st.expander(f"🔍 View Context Documents ({result['context_documents_count']} documents)"):
-                        context_docs = assistant.retrieve_context(question, k=k_results)
-                        for i, doc in enumerate(context_docs, 1):
-                            st.markdown(f"**Document {i}:**")
-                            st.markdown(f"*Source: {doc.metadata.get('source', 'Unknown')} | Grade: {doc.metadata.get('grade', 'Not specified')}*")
-                            st.text_area(f"Content {i}", doc.page_content, height=100, key=f"doc_{i}")
-                
-            except Exception as e:
-                error_msg = str(e)
-                st.error(f"❌ Error: {error_msg}")
-                
-                # Specific error handling
-                if "429" in error_msg and "rate_limit" in error_msg:
-                    st.error("❌ Rate limit exceeded! Try:")
-                    st.markdown("""
-                    - **Reduce context documents** (use 1-2 instead of 5)
-                    - **Use gpt-4o-mini** instead of gpt-4
-                    - **Wait a minute** and try again
-                    - **Ask a shorter question**
-                    """)
-                elif "model" in error_msg.lower() and "not found" in error_msg.lower():
-                    st.error("❌ Invalid model name! Available models:")
-                    st.markdown("""
-                    - **gpt-4o-mini** (recommended)
-                    - **gpt-4** 
-                    - **gpt-3.5-turbo**
-                    """)
-                elif "api key" in error_msg.lower():
-                    st.error("❌ API key issue! Check your .env file")
-                else:
-                    st.error(f"❌ Unexpected error: {e}")
-                    st.info("🔍 Check the terminal logs for more details")
-
-def example_questions():
-    """Show example questions."""
-    st.subheader("💡 Example Questions")
-    
-    examples = [
-        "Explain photosynthesis for Class 6",
-        "What are the basic properties of matter?",
-        "How do plants make their own food?",
-        "Explain the water cycle for Class 5",
-        "What are the different types of triangles?",
-        "How does the digestive system work?",
-        "Explain the concept of gravity for Class 7",
-        "What are the main parts of a plant cell?"
-    ]
-    
-    cols = st.columns(2)
-    for i, example in enumerate(examples):
-        with cols[i % 2]:
-            if st.button(example, key=f"example_{i}"):
-                st.session_state.example_question = example
-                st.rerun()
-
-def main():
-    """Main application."""
-    # Header
+def login_page(auth_manager: AuthManager):
+    """Display login/registration page."""
     st.markdown('<h1 class="main-header">🎓 AI Educational Assistant</h1>', unsafe_allow_html=True)
-    st.markdown('<p style="text-align: center; font-size: 1.2rem; color: #666;">Powered by RAG (Retrieval Augmented Generation)</p>', unsafe_allow_html=True)
+    st.markdown("### Welcome! Please login or register to continue")
     
-    # Check for API key
-    if not Config.OPENAI_API_KEY:
-        st.error("❌ OPENAI_API_KEY not found. Please set it in your .env file or environment variables.")
-        st.stop()
+    tab1, tab2 = st.tabs(["Login", "Register"])
+    
+    with tab1:
+        with st.form("login_form"):
+            st.subheader("Login")
+            email = st.text_input("Email", placeholder="your.email@example.com")
+            password = st.text_input("Password", type="password")
+            
+            if st.form_submit_button("Login", type="primary"):
+                if email and password:
+                    user_info = auth_manager.login(email, password)
+                    if user_info:
+                        st.session_state.authenticated = True
+                        st.session_state.user_id = user_info['user_id']
+                        st.session_state.user_info = user_info
+                        st.session_state.session_id = str(uuid.uuid4())
+                        st.session_state.session_start_time = datetime.now()
+                        st.success("Login successful!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid email or password")
+                else:
+                    st.error("Please enter both email and password")
+    
+    with tab2:
+        with st.form("register_form"):
+            st.subheader("Register New Account")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                reg_email = st.text_input("Email*", placeholder="your.email@example.com", key="reg_email")
+                reg_password = st.text_input("Password*", type="password", help="Minimum 6 characters", key="reg_password")
+                reg_name = st.text_input("Full Name*", placeholder="John Doe", key="reg_name")
+            
+            with col2:
+                classes = [f"Class {i}" for i in range(1, 11)]
+                reg_class = st.selectbox("Class*", classes, key="reg_class")
+                reg_class_value = f"class{classes.index(reg_class) + 1}"
+                
+                reg_dob = st.date_input("Date of Birth", min_value=datetime(1990, 1, 1), max_value=datetime.now(), key="reg_dob")
+                reg_phone = st.text_input("Phone Number", placeholder="9876543210", key="reg_phone")
+            
+            st.markdown("*Required fields")
+            
+            if st.form_submit_button("Register", type="primary"):
+                try:
+                    user_info = auth_manager.register_user(
+                        email=reg_email,
+                        password=reg_password,
+                        name=reg_name,
+                        class_grade=reg_class_value,
+                        date_of_birth=str(reg_dob) if reg_dob else None,
+                        phone_number=reg_phone
+                    )
+                    
+                    st.session_state.authenticated = True
+                    st.session_state.user_id = user_info['user_id']
+                    st.session_state.user_info = user_info
+                    st.session_state.session_id = str(uuid.uuid4())
+                    st.session_state.session_start_time = datetime.now()
+                    st.success("Registration successful! You are now logged in.")
+                    st.rerun()
+                    
+                except AuthenticationError as e:
+                    st.error(f"Registration failed: {str(e)}")
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}")
+
+def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manager: ContentManager, 
+             assistant: EducationalAssistant, history_manager: HistoryManager):
+    """Display main application interface."""
+    user_info = st.session_state.user_info
     
     # Sidebar
     with st.sidebar:
-        st.markdown("## 🎛️ Navigation")
-        page = st.radio(
-            "Choose a section:",
-            ["📚 Upload Textbooks", "❓ Ask Questions", "💡 Examples"]
-        )
+        st.markdown(f"""
+        <div class="user-info">
+            <h4>👤 {user_info['name']}</h4>
+            <p>📧 {user_info['email']}</p>
+            <p>🎓 {user_info['class_grade'].replace('class', 'Class ')}</p>
+        </div>
+        """, unsafe_allow_html=True)
         
-        st.markdown("---")
-        st.markdown("## ℹ️ About")
-        st.markdown("""
-        This AI Educational Assistant uses RAG (Retrieval Augmented Generation) to provide accurate, 
-        textbook-based answers to educational questions.
+        # Logout button
+        if st.button("🚪 Logout", use_container_width=True):
+            # Save conversation history before logout
+            if st.session_state.full_conversation_history:
+                with st.spinner("Saving conversation history..."):
+                    history_manager.save_session_history(
+                        user_id=st.session_state.user_id,
+                        session_id=st.session_state.session_id,
+                        conversations=st.session_state.full_conversation_history,
+                        start_time=st.session_state.session_start_time,
+                        end_time=datetime.now()
+                    )
+            
+            # Clear session state
+            st.session_state.authenticated = False
+            st.session_state.user_id = None
+            st.session_state.user_info = None
+            st.session_state.selected_subject = None
+            st.session_state.selected_textbooks = []
+            st.session_state.chat_history = []
+            st.session_state.full_conversation_history = []
+            st.session_state.session_id = None
+            st.session_state.session_start_time = None
+            st.rerun()
         
-        **Features:**
-        - 📚 PDF and text file processing
-        - 🧠 Smart text chunking
-        - 🔍 Semantic search
-        - 💡 Context-aware answers
-        - 📖 Grade-appropriate responses
-        """)
-    
-    # Main content
-    if page == "📚 Upload Textbooks":
-        upload_textbooks()
-    
-    elif page == "❓ Ask Questions":
-        # Check if example question was selected
-        question = None
-        if hasattr(st.session_state, 'example_question'):
-            question = st.session_state.example_question
-            del st.session_state.example_question
+        st.divider()
         
-        ask_questions(question)
+        # Subject and Textbook Selection
+        st.subheader("📚 Content Selection")
+        
+        # Get available subjects for user's class
+        subjects = user_manager.get_available_subjects(st.session_state.user_id)
+        
+        if subjects:
+            # Subject selection
+            subject_names = [s['subject_name'] for s in subjects]
+            current_subject = user_manager.db.get_user_subject_selection(st.session_state.user_id)
+            
+            if current_subject:
+                default_index = next((i for i, s in enumerate(subjects) if s['id'] == current_subject['subject_id']), 0)
+            else:
+                default_index = 0
+            
+            selected_subject_name = st.selectbox(
+                "Select Subject",
+                subject_names,
+                index=default_index,
+                key="subject_selector"
+            )
+            
+            # Find selected subject ID
+            selected_subject = next(s for s in subjects if s['subject_name'] == selected_subject_name)
+            
+            # Save subject selection
+            if st.button("Save Subject Selection", use_container_width=True):
+                if user_manager.select_subject(st.session_state.user_id, selected_subject['id']):
+                    st.session_state.selected_subject = selected_subject
+                    st.success("Subject selection saved!")
+                    st.rerun()
+                else:
+                    st.error("Failed to save subject selection")
+            
+            # Textbook selection (only if subject is selected)
+            current_selection = user_manager.db.get_user_subject_selection(st.session_state.user_id)
+            if current_selection:
+                st.divider()
+                st.subheader("📖 Select Textbooks")
+                
+                available_textbooks = user_manager.get_available_textbooks(st.session_state.user_id)
+                
+                if available_textbooks:
+                    # Create checkboxes for each textbook
+                    selected_ids = []
+                    for textbook in available_textbooks:
+                        if st.checkbox(
+                            textbook['book_name'],
+                            value=textbook['is_selected'],
+                            key=f"textbook_{textbook['id']}"
+                        ):
+                            selected_ids.append(textbook['id'])
+                    
+                    if st.button("Save Textbook Selection", use_container_width=True):
+                        if selected_ids:
+                            if user_manager.select_textbooks(st.session_state.user_id, selected_ids):
+                                st.success("Textbook selection saved!")
+                                st.rerun()
+                            else:
+                                st.error("Failed to save textbook selection")
+                        else:
+                            st.error("Please select at least one textbook")
+                else:
+                    st.info("No textbooks available for this subject")
+        else:
+            st.warning("No subjects available for your class")
+        
+        # Show current selection summary
+        st.divider()
+        st.subheader("📋 Current Selection")
+        summary = user_manager.get_selection_summary(st.session_state.user_id)
+        
+        if summary['subject']:
+            st.write(f"**Subject:** {summary['subject']}")
+            if summary['textbooks']:
+                st.write(f"**Textbooks:** {summary['textbook_count']}")
+                for book in summary['textbooks']:
+                    st.write(f"  - {book}")
+            else:
+                st.warning("No textbooks selected")
+        else:
+            st.warning("No subject selected")
     
-    elif page == "💡 Examples":
-        example_questions()
+    # Main content area
+    st.markdown('<h1 class="main-header">🎓 AI Educational Assistant</h1>', unsafe_allow_html=True)
+    
+    # Validate selections before allowing questions
+    validation = user_manager.validate_user_selections(st.session_state.user_id)
+    
+    if not validation['is_valid']:
+        st.error("⚠️ Please complete your selection before asking questions:")
+        for error in validation['errors']:
+            st.error(f"  • {error}")
+        
+        # Show example questions anyway
+        st.subheader("📝 Example Questions")
+        example_questions = [
+            "What is photosynthesis?",
+            "Explain the water cycle",
+            "What are prime numbers?",
+            "How do plants make food?",
+            "What is gravity?"
+        ]
+        
+        cols = st.columns(2)
+        for i, question in enumerate(example_questions):
+            with cols[i % 2]:
+                st.info(f"💡 {question}")
+    else:
+        # Show warnings if any
+        if validation['warnings']:
+            for warning in validation['warnings']:
+                st.warning(f"⚠️ {warning}")
+        
+        # Question input
+        st.subheader("Ask Your Question")
+        
+        # Example questions based on selected subject
+        with st.expander("💡 Example Questions"):
+            summary = user_manager.get_selection_summary(st.session_state.user_id)
+            subject = summary['subject']
+            
+            if subject:
+                if 'math' in subject.lower():
+                    examples = [
+                        "What are prime numbers?",
+                        "How do I solve linear equations?",
+                        "Explain fractions with examples",
+                        "What is the Pythagorean theorem?"
+                    ]
+                elif 'science' in subject.lower():
+                    examples = [
+                        "What is photosynthesis?",
+                        "How does digestion work?",
+                        "Explain the water cycle",
+                        "What are the states of matter?"
+                    ]
+                elif 'english' in subject.lower():
+                    examples = [
+                        "What are nouns and pronouns?",
+                        "Explain the parts of speech",
+                        "How do I write a good paragraph?",
+                        "What is the difference between active and passive voice?"
+                    ]
+                else:
+                    examples = [
+                        f"Explain a key concept from {subject}",
+                        f"What are the important topics in {subject}?",
+                        f"Give me an example from {subject}",
+                        f"Help me understand {subject} better"
+                    ]
+                
+                for example in examples:
+                    st.write(f"• {example}")
+        
+        # Question form
+        with st.form("question_form", clear_on_submit=True):
+            question = st.text_area(
+                "Your Question",
+                placeholder=f"Ask any question about {summary['subject']}...",
+                height=100
+            )
+            
+            col1, col2 = st.columns([1, 5])
+            with col1:
+                submit_button = st.form_submit_button("Ask", type="primary", use_container_width=True)
+        
+        if submit_button and question:
+            with st.spinner("🤔 Thinking..."):
+                try:
+                    # Check if we need historical context
+                    should_include_history, reason = history_manager.should_include_history(
+                        question, st.session_state.user_id
+                    )
+                    
+                    # Get historical context if needed
+                    historical_context = None
+                    if should_include_history:
+                        st.info(f"📚 Including context from previous sessions: {reason}")
+                        history_summaries = history_manager.get_recent_history(
+                            st.session_state.user_id, limit=5
+                        )
+                        if history_summaries:
+                            historical_context = history_manager.format_history_context(history_summaries)
+                    
+                    # Include current session context
+                    current_session_context = []
+                    if st.session_state.chat_history:
+                        # Include last 3 Q&A from current session
+                        for chat in st.session_state.chat_history[-3:]:
+                            current_session_context.append({
+                                'question': chat['question'],
+                                'answer': chat['answer'][:200] + '...'  # Truncate for context
+                            })
+                    
+                    # Get answer with user context
+                    result = assistant.answer_question(
+                        question=question,
+                        user_id=st.session_state.user_id,
+                        historical_context=historical_context,
+                        current_session_context=current_session_context
+                    )
+                    
+                    # Add to chat history
+                    conversation_entry = {
+                        'question': question,
+                        'answer': result['answer'],
+                        'timestamp': datetime.now()
+                    }
+                    
+                    st.session_state.chat_history.append(conversation_entry)
+                    st.session_state.full_conversation_history.append(conversation_entry)
+                    
+                    # Display answer
+                    st.subheader("Answer")
+                    st.markdown(f'<div class="answer-box">{result["answer"]}</div>', unsafe_allow_html=True)
+                    
+                    # Show metadata
+                    with st.expander("📊 Answer Details"):
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.write(f"**Model:** {result['model_used']}")
+                            st.write(f"**Documents Used:** {result['context_documents_count']}")
+                        
+                        with col2:
+                            if 'template_info' in result:
+                                st.write(f"**Question Type:** {result['template_info']['question_type']}")
+                                st.write(f"**Detected Subject:** {result['template_info']['subject']}")
+                        
+                        if result['sources']:
+                            st.write("**Sources:**")
+                            for source in result['sources']:
+                                st.write(f"  • {source}")
+                
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+        
+        # Chat history
+        if st.session_state.chat_history:
+            st.divider()
+            st.subheader("💬 Chat History")
+            
+            for i, chat in enumerate(reversed(st.session_state.chat_history[-5:])):  # Show last 5
+                with st.expander(f"Q: {chat['question'][:100]}...", expanded=(i==0)):
+                    st.write(f"**Question:** {chat['question']}")
+                    st.write(f"**Answer:** {chat['answer']}")
+                    st.caption(f"Asked at: {chat['timestamp'].strftime('%Y-%m-%d %H:%M')}")
+
+def profile_page(auth_manager: AuthManager, user_manager: UserManager):
+    """Display user profile page."""
+    st.markdown('<h1 class="main-header">👤 User Profile</h1>', unsafe_allow_html=True)
+    
+    user_info = auth_manager.get_user_info(st.session_state.user_id)
+    
+    if not user_info:
+        st.error("Failed to load user profile")
+        return
+    
+    tab1, tab2 = st.tabs(["View Profile", "Edit Profile"])
+    
+    with tab1:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Personal Information")
+            st.write(f"**Name:** {user_info['name']}")
+            st.write(f"**Email:** {user_info['email']}")
+            st.write(f"**Class:** {user_info['class_grade'].replace('class', 'Class ')}")
+        
+        with col2:
+            st.subheader("Additional Details")
+            st.write(f"**Date of Birth:** {user_info['date_of_birth'] or 'Not provided'}")
+            st.write(f"**Phone:** {user_info['phone_number'] or 'Not provided'}")
+            st.write(f"**Member Since:** {user_info['created_at'][:10]}")
+            st.write(f"**Last Login:** {user_info['last_login'] or 'N/A'}")
+    
+    with tab2:
+        st.subheader("Edit Profile")
+        
+        with st.form("edit_profile_form"):
+            name = st.text_input("Full Name", value=user_info['name'])
+            
+            classes = [f"Class {i}" for i in range(1, 11)]
+            current_class_index = int(user_info['class_grade'].replace('class', '')) - 1
+            selected_class = st.selectbox("Class", classes, index=current_class_index)
+            class_value = f"class{classes.index(selected_class) + 1}"
+            
+            dob = st.date_input(
+                "Date of Birth",
+                value=datetime.strptime(user_info['date_of_birth'], '%Y-%m-%d') if user_info['date_of_birth'] else None,
+                min_value=datetime(1990, 1, 1),
+                max_value=datetime.now()
+            )
+            
+            phone = st.text_input("Phone Number", value=user_info['phone_number'] or '')
+            
+            if st.form_submit_button("Update Profile", type="primary"):
+                try:
+                    success = auth_manager.update_profile(
+                        user_id=st.session_state.user_id,
+                        name=name,
+                        class_grade=class_value,
+                        date_of_birth=str(dob) if dob else None,
+                        phone_number=phone
+                    )
+                    
+                    if success:
+                        st.success("Profile updated successfully!")
+                        # Update session state
+                        st.session_state.user_info['name'] = name
+                        st.session_state.user_info['class_grade'] = class_value
+                        st.rerun()
+                    else:
+                        st.error("Failed to update profile")
+                
+                except AuthenticationError as e:
+                    st.error(f"Update failed: {str(e)}")
+
+# Main app logic
+def main():
+    init_session_state()
+    
+    # Initialize services
+    db, auth_manager, user_manager, content_manager, assistant, history_manager = initialize_services()
+    
+    if not all([db, auth_manager, user_manager, content_manager, assistant, history_manager]):
+        st.error("Failed to initialize application. Please check the logs.")
+        return
+    
+    # Authentication check
+    if not st.session_state.authenticated:
+        login_page(auth_manager)
+    else:
+        # Create navigation
+        pages = {
+            "📚 Study Assistant": lambda: main_app(auth_manager, user_manager, content_manager, assistant, history_manager),
+            "👤 Profile": lambda: profile_page(auth_manager, user_manager)
+        }
+        
+        # Add navigation to sidebar
+        with st.sidebar:
+            st.title("Navigation")
+            selection = st.radio("Go to", list(pages.keys()))
+        
+        # Display selected page
+        pages[selection]()
 
 if __name__ == "__main__":
     main()

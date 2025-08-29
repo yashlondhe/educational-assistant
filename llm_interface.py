@@ -70,7 +70,9 @@ class LLMInterface:
         
         return "\n".join(context_parts)
     
-    def answer_question(self, question: str, context_documents: List[Document], user_class: str = None) -> Dict[str, Any]:
+    def answer_question(self, question: str, context_documents: List[Document], 
+                       user_class: str = None, historical_context: str = None,
+                       current_session_context: List[Dict] = None) -> Dict[str, Any]:
         """Generate an answer to a question using the provided context."""
         try:
             # Format the context
@@ -79,6 +81,17 @@ class LLMInterface:
             # Add user class information to context if provided
             if user_class:
                 context = f"Student's Class: {user_class.replace('class', 'Class ')}\n\n{context}"
+            
+            # Add historical context if provided
+            if historical_context:
+                context = f"{historical_context}\n\n--- Current Question Context ---\n{context}"
+            
+            # Add current session context if provided
+            if current_session_context:
+                session_context_str = "\n--- Current Session Context ---\n"
+                for i, conv in enumerate(current_session_context, 1):
+                    session_context_str += f"Q{i}: {conv['question']}\nA{i}: {conv['answer']}\n\n"
+                context = f"{session_context_str}{context}"
             
             # Get enhanced prompt using template manager
             enhanced_prompt = self.prompt_manager.get_enhanced_prompt(question, context)
@@ -172,4 +185,27 @@ class LLMInterface:
             
         except Exception as e:
             logger.error(f"Error generating answer with chain: {str(e)}")
+            raise
+    
+    def generate_response(self, prompt: str, max_tokens: int = None, temperature: float = None) -> str:
+        """Generate a raw response for a given prompt."""
+        try:
+            # Create temporary LLM with custom settings if provided
+            llm = ChatOpenAI(
+                model=self.model_name,
+                temperature=temperature if temperature is not None else self.temperature,
+                max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
+                openai_api_key=Config.OPENAI_API_KEY
+            )
+            
+            messages = [
+                SystemMessage(content="You are a helpful AI assistant."),
+                HumanMessage(content=prompt)
+            ]
+            
+            response = llm.invoke(messages)
+            return response.content
+            
+        except Exception as e:
+            logger.error(f"Error generating response: {str(e)}")
             raise

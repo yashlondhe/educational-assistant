@@ -200,7 +200,9 @@ class EducationalAssistant:
             logger.error(f"Error retrieving context: {str(e)}")
             raise
     
-    def answer_question(self, question: str, k: int = None, user_id: int = None) -> Dict[str, Any]:
+    def answer_question(self, question: str, k: int = None, user_id: int = None,
+                       historical_context: str = None, 
+                       current_session_context: List[Dict] = None) -> Dict[str, Any]:
         """
         Answer a question using RAG pipeline.
         
@@ -208,6 +210,8 @@ class EducationalAssistant:
             question: The question to answer
             k: Number of context documents to retrieve
             user_id: Optional user ID for personalized responses
+            historical_context: Previous conversation summaries
+            current_session_context: Recent Q&A from current session
             
         Returns:
             Dictionary containing answer and metadata
@@ -243,8 +247,14 @@ class EducationalAssistant:
                         "model_used": self.llm_interface.model_name
                     }
             
-            # Generate answer using LLM with user's class information
-            result = self.llm_interface.answer_question(question, context_documents, user_class=user_class)
+            # Generate answer using LLM with user's class information and conversation context
+            result = self.llm_interface.answer_question(
+                question, 
+                context_documents, 
+                user_class=user_class,
+                historical_context=historical_context,
+                current_session_context=current_session_context
+            )
             
             return result
             
