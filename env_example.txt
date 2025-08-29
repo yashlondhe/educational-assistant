@@ -1,23 +1,69 @@
-# OpenAI Configuration
+# =============================================================================
+# AI Educational Assistant - Environment Configuration
+# =============================================================================
+# Copy this file to .env and fill in your actual values
+# =============================================================================
+
+# =============================================================================
+# OpenAI Configuration (Required)
+# =============================================================================
+# Your OpenAI API key - Get one from https://platform.openai.com/api-keys
 OPENAI_API_KEY=your_openai_api_key_here
+
+# LLM model for answer generation (default: gpt-4o-mini)
+# Options: gpt-4o-mini, gpt-4o, gpt-3.5-turbo, etc.
 OPENAI_MODEL=gpt-4o-mini
+
+# Model for generating text embeddings (default: text-embedding-ada-002)
+# Options: text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large
 EMBEDDING_MODEL=text-embedding-ada-002
 
+# =============================================================================
 # Vector Database Configuration
+# =============================================================================
+# Type of vector database to use (default: chroma)
+# Options: chroma, faiss
 VECTOR_DB_TYPE=chroma
+
+# Directory to store Chroma database files (default: ./chroma_db)
+# Only used when VECTOR_DB_TYPE=chroma
 CHROMA_PERSIST_DIRECTORY=./chroma_db
 
+# =============================================================================
 # Text Processing Configuration
+# =============================================================================
+# Size of text chunks in characters (default: 1000)
+# Recommended range: 500-2000
 CHUNK_SIZE=1000
+
+# Overlap between consecutive chunks in characters (default: 200)
+# Recommended range: 100-500
 CHUNK_OVERLAP=200
 
-# File Paths
+# =============================================================================
+# File Paths Configuration
+# =============================================================================
+# Directory containing textbook files (PDF, TXT) (default: ./textbooks)
 TEXTBOOKS_DIR=./textbooks
+
+# Directory for output files and temporary data (default: ./output)
 OUTPUT_DIR=./output
 
+# =============================================================================
 # Retrieval Configuration
+# =============================================================================
+# Number of most relevant documents to retrieve (default: 5)
+# Recommended range: 3-10
 TOP_K_RESULTS=5
 
+# =============================================================================
 # LLM Configuration
+# =============================================================================
+# Maximum tokens for LLM response (default: 1000)
+# Recommended range: 500-2000
 MAX_TOKENS=1000
+
+# Temperature for LLM response generation (default: 0.7)
+# Range: 0.0 (deterministic) to 1.0 (creative)
+# Lower values = more focused, Higher values = more creative
 TEMPERATURE=0.7
