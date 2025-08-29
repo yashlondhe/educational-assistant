@@ -8,6 +8,8 @@ from text_processor import TextProcessor
 from vector_store import VectorStore
 from llm_interface import LLMInterface
 from config import Config
+from database import Database
+from user_manager import UserManager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -37,6 +39,10 @@ class EducationalAssistant:
         self.llm_interface = LLMInterface(
             model_name=llm_model
         )
+        
+        # Initialize database and user manager
+        self.db = Database()
+        self.user_manager = UserManager(self.db)
         
         # Create necessary directories
         os.makedirs(Config.TEXTBOOKS_DIR, exist_ok=True)
@@ -155,13 +161,14 @@ class EducationalAssistant:
         """
         self.create_embeddings(documents)
     
-    def retrieve_context(self, question: str, k: int = None) -> List:
+    def retrieve_context(self, question: str, k: int = None, user_id: int = None) -> List:
         """
         Retrieve relevant context for a given question.
         
         Args:
             question: The question to find context for
             k: Number of documents to retrieve
+            user_id: Optional user ID to filter by selected textbooks
             
         Returns:
             List of relevant documents
@@ -174,7 +181,18 @@ class EducationalAssistant:
             if self.vector_store.vector_store is None:
                 raise ValueError("No vector store available. Please load textbooks first.")
             
-            documents = self.vector_store.similarity_search(question, k=k)
+            # Apply user filtering if user_id is provided
+            filter_dict = None
+            if user_id:
+                selected_paths = self.db.get_user_selected_textbook_paths(user_id)
+                if selected_paths:
+                    filter_dict = {"file_path": {"$in": selected_paths}}
+                    logger.info(f"Filtering search to {len(selected_paths)} selected textbooks")
+                else:
+                    logger.warning(f"User {user_id} has no selected textbooks")
+                    return []
+            
+            documents = self.vector_store.similarity_search(question, k=k, filter_dict=filter_dict)
             logger.info(f"Retrieved {len(documents)} relevant documents")
             return documents
             
@@ -182,33 +200,51 @@ class EducationalAssistant:
             logger.error(f"Error retrieving context: {str(e)}")
             raise
     
-    def answer_question(self, question: str, k: int = None) -> Dict[str, Any]:
+    def answer_question(self, question: str, k: int = None, user_id: int = None) -> Dict[str, Any]:
         """
         Answer a question using RAG pipeline.
         
         Args:
             question: The question to answer
             k: Number of context documents to retrieve
+            user_id: Optional user ID for personalized responses
             
         Returns:
             Dictionary containing answer and metadata
         """
         try:
+            # Get user profile if user_id is provided
+            user_class = None
+            if user_id:
+                profile = self.db.get_user_profile(user_id)
+                if profile:
+                    user_class = profile['class_grade']
+            
             # Retrieve relevant context
-            context_documents = self.retrieve_context(question, k=k)
+            context_documents = self.retrieve_context(question, k=k, user_id=user_id)
             
             if not context_documents:
-                return {
-                    "answer": "I don't have enough information in my textbook database to answer this question. Please make sure relevant textbooks are loaded.",
-                    "sources": [],
-                    "grades": [],
-                    "subjects": [],
-                    "context_documents_count": 0,
-                    "model_used": self.llm_interface.model_name
-                }
+                if user_id:
+                    return {
+                        "answer": "I don't have enough information in your selected textbooks to answer this question. Please make sure you have selected the relevant textbooks for your subject.",
+                        "sources": [],
+                        "grades": [],
+                        "subjects": [],
+                        "context_documents_count": 0,
+                        "model_used": self.llm_interface.model_name
+                    }
+                else:
+                    return {
+                        "answer": "I don't have enough information in my textbook database to answer this question. Please make sure relevant textbooks are loaded.",
+                        "sources": [],
+                        "grades": [],
+                        "subjects": [],
+                        "context_documents_count": 0,
+                        "model_used": self.llm_interface.model_name
+                    }
             
-            # Generate answer using LLM
-            result = self.llm_interface.answer_question(question, context_documents)
+            # Generate answer using LLM with user's class information
+            result = self.llm_interface.answer_question(question, context_documents, user_class=user_class)
             
             return result
             

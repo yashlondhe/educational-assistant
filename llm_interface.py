@@ -70,11 +70,15 @@ class LLMInterface:
         
         return "\n".join(context_parts)
     
-    def answer_question(self, question: str, context_documents: List[Document]) -> Dict[str, Any]:
+    def answer_question(self, question: str, context_documents: List[Document], user_class: str = None) -> Dict[str, Any]:
         """Generate an answer to a question using the provided context."""
         try:
             # Format the context
             context = self.format_context(context_documents)
+            
+            # Add user class information to context if provided
+            if user_class:
+                context = f"Student's Class: {user_class.replace('class', 'Class ')}\n\n{context}"
             
             # Get enhanced prompt using template manager
             enhanced_prompt = self.prompt_manager.get_enhanced_prompt(question, context)

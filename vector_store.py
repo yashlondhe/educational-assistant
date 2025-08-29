@@ -116,15 +116,39 @@ class VectorStore:
             logger.error(f"Error adding documents to vector store: {str(e)}")
             raise
     
-    def similarity_search(self, query: str, k: int = None) -> List[Document]:
-        """Search for similar documents."""
+    def similarity_search(self, query: str, k: int = None, filter_dict: Dict = None) -> List[Document]:
+        """Search for similar documents with optional filtering."""
         if self.vector_store is None:
             raise ValueError("Vector store not initialized")
         
         k = k or Config.TOP_K_RESULTS
         
         try:
-            results = self.vector_store.similarity_search(query, k=k)
+            if filter_dict and self.db_type == "chroma":
+                # Chroma supports metadata filtering
+                results = self.vector_store.similarity_search(
+                    query, 
+                    k=k,
+                    filter=filter_dict
+                )
+            elif filter_dict and self.db_type == "faiss":
+                # FAISS doesn't support direct filtering, so we need to post-filter
+                # Get more results and filter manually
+                results = self.vector_store.similarity_search(query, k=k*3)
+                
+                # Filter by file paths if provided
+                if 'file_path' in filter_dict and '$in' in filter_dict['file_path']:
+                    allowed_paths = filter_dict['file_path']['$in']
+                    results = [
+                        doc for doc in results 
+                        if doc.metadata.get('file_path') in allowed_paths
+                    ]
+                    # Limit to k results
+                    results = results[:k]
+            else:
+                # No filtering
+                results = self.vector_store.similarity_search(query, k=k)
+            
             logger.info(f"Retrieved {len(results)} documents for query: {query[:50]}...")
             return results
         except Exception as e:
