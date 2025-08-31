@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from datetime import datetime
 import uuid
+import tempfile
+import openai
 
 from educational_assistant import EducationalAssistant
 from auth import AuthManager, AuthenticationError
@@ -131,6 +133,36 @@ st.markdown("""
         font-weight: bold;
         margin-bottom: 1rem;
     }
+    .input-mode-container {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 1rem;
+        justify-content: center;
+    }
+    .input-mode-button {
+        flex: 1;
+        text-align: center;
+    }
+    .voice-input-section {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 8px;
+        border: 2px dashed #28a745;
+        margin: 1rem 0;
+    }
+    .transcribed-text-box {
+        background-color: #e8f5e8;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #28a745;
+        margin: 10px 0;
+    }
+    .audio-instructions {
+        color: #6c757d;
+        font-style: italic;
+        text-align: center;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -147,6 +179,39 @@ def get_user_initials(name):
         return (words[0][0] + words[-1][0]).upper()
     else:
         return "U"
+
+def transcribe_audio_with_openai(audio_bytes):
+    """Convert audio bytes to text using OpenAI Whisper API."""
+    if not audio_bytes:
+        return ""
+    
+    try:
+        # Create OpenAI client
+        client = openai.OpenAI(api_key=Config.OPENAI_API_KEY)
+        
+        # Save audio bytes to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
+            tmp_file.write(audio_bytes)
+            tmp_file_path = tmp_file.name
+        
+        # Transcribe using OpenAI Whisper
+        with open(tmp_file_path, "rb") as audio_file:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=audio_file,
+                response_format="text"
+            )
+        
+        # Clean up temporary file
+        os.unlink(tmp_file_path)
+        
+        # Return the transcribed text
+        result = transcript.strip() if hasattr(transcript, 'strip') else str(transcript).strip()
+        return result
+        
+    except Exception as e:
+        st.error(f"Error transcribing audio: {str(e)}")
+        return ""
 
 # Initialize session state
 def init_session_state():
@@ -171,6 +236,12 @@ def init_session_state():
         st.session_state.full_conversation_history = []
     if 'current_page' not in st.session_state:
         st.session_state.current_page = "📚 Study Assistant"
+    if 'input_mode' not in st.session_state:
+        st.session_state.input_mode = "text"  # "text" or "voice"
+    if 'transcribed_text' not in st.session_state:
+        st.session_state.transcribed_text = ""
+    if 'last_audio_hash' not in st.session_state:
+        st.session_state.last_audio_hash = None
 
 @st.cache_resource
 def initialize_services():
@@ -446,8 +517,7 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
         </div>
         """, unsafe_allow_html=True)
         
-        # Question input
-        st.markdown("### 💬 Ask Your Question")
+
         
         # Example questions based on selected subject
         with st.expander("💡 Example Questions"):
@@ -487,14 +557,108 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
                 for example in examples:
                     st.write(f"• {example}")
         
-        # Question form
-        with st.form("question_form", clear_on_submit=True):
-            question = st.text_area(
-                "Your Question",
-                placeholder=f"Ask any question about {summary['subject']}...",
-                height=100
-            )
+        # Input mode selection (outside form)
+        st.markdown("### 💬 Ask Your Question")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📝 Text Input", use_container_width=True):
+                st.session_state.input_mode = "text"
+                st.session_state.transcribed_text = ""
+        with col2:
+            if st.button("🎤 Voice Input", use_container_width=True):
+                st.session_state.input_mode = "voice"
+        
+        # Voice input processing (outside form for immediate transcription)
+        if st.session_state.input_mode == "voice":
+            st.info("🎤 **Voice Input Mode** - Record your question below")
             
+            # Audio input with instructions
+            st.markdown('<p class="audio-instructions">Click the audio recorder below to start recording your question</p>', unsafe_allow_html=True)
+            audio_data = st.audio_input("Record your question:")
+            
+            if audio_data is not None:
+                # Show audio player
+                st.audio(audio_data)
+                
+                # Transcribe audio only if we haven't transcribed this audio yet
+                audio_bytes = audio_data.getvalue()
+                current_audio_hash = str(hash(audio_bytes))
+                
+                if 'last_audio_hash' not in st.session_state or st.session_state.last_audio_hash != current_audio_hash:
+                    # New audio, transcribe it immediately
+                    with st.spinner("🔄 Converting speech to text..."):
+                        transcribed = transcribe_audio_with_openai(audio_bytes)
+                    
+                    if transcribed:
+                        st.session_state.transcribed_text = transcribed
+                        st.session_state.last_audio_hash = current_audio_hash
+                        st.success("✅ Audio transcribed successfully!")
+                        # Force a rerun to update the UI
+                        st.rerun()
+                    else:
+                        st.error("❌ Could not transcribe audio. Please try again or switch to text input.")
+                else:
+                    # Same audio, use previous transcription
+                    if st.session_state.transcribed_text:
+                        st.success("✅ Using previous transcription")
+            
+            # Show transcription result if available
+            if st.session_state.transcribed_text:
+                st.markdown(f'<div class="transcribed-text-box">📝 <strong>Transcribed:</strong> {st.session_state.transcribed_text}</div>', 
+                           unsafe_allow_html=True)
+        
+        # Question form (now only for final submission)
+        with st.form("question_form", clear_on_submit=True):
+            # Show current mode
+            if st.session_state.input_mode == "text":
+                st.info("📝 **Text Input Mode** - Type your question below")
+                question = st.text_area(
+                    "Your Question",
+                    placeholder=f"Ask any question about {summary['subject']}...",
+                    height=100,
+                    value=st.session_state.transcribed_text
+                )
+            
+            else:  # voice mode
+                # Text editing section for voice mode
+                st.markdown('<div class="voice-input-section">', unsafe_allow_html=True)
+                
+                if st.session_state.transcribed_text:
+                    # Show editable text area with transcribed content
+                    col_text, col_clear = st.columns([4, 1])
+                    with col_text:
+                        st.markdown("**Review and edit your question before submitting:**")
+                    with col_clear:
+                        if st.form_submit_button("🗑️ Clear", help="Clear transcribed text"):
+                            st.session_state.transcribed_text = ""
+                            st.session_state.last_audio_hash = None
+                            st.rerun()
+                    
+                    question = st.text_area(
+                        "Edit your question:",
+                        value=st.session_state.transcribed_text,
+                        height=100,
+                        help="You can edit the transcribed text before submitting your question.",
+                        key="voice_editable_text"
+                    )
+                    
+                else:
+                    # Show disabled text area when no transcription
+                    st.markdown("**Record audio above to enable text editing**")
+                    question = st.text_area(
+                        "Your transcribed question will appear here:",
+                        value="",
+                        height=100,
+                        placeholder="Record audio above to see transcribed text here...",
+                        disabled=True,
+                        help="This text box will become editable after you record and transcribe audio.",
+                        key="voice_disabled_text"
+                    )
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Submit button (same for both modes)
             col1, col2 = st.columns([1, 5])
             with col1:
                 submit_button = st.form_submit_button("Ask", type="primary", use_container_width=True)
