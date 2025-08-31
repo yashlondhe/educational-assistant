@@ -17,7 +17,7 @@ st.set_page_config(
     page_title="AI Educational Assistant",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS
@@ -59,8 +59,94 @@ st.markdown("""
         border-left: 4px solid #ffc107;
         margin-bottom: 1rem;
     }
+    .profile-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1rem 0;
+        margin-bottom: 1rem;
+    }
+    .stButton > button[data-testid="baseButton-secondary"] {
+        width: 40px !important;
+        height: 40px !important;
+        border-radius: 50% !important;
+        background-color: #1f77b4 !important;
+        color: white !important;
+        font-weight: bold !important;
+        font-size: 14px !important;
+        border: 2px solid #e0e0e0 !important;
+        padding: 0 !important;
+        min-height: 40px !important;
+    }
+    .stButton > button[data-testid="baseButton-secondary"]:hover {
+        background-color: #0d5aa7 !important;
+        border-color: #1f77b4 !important;
+        color: white !important;
+    }
+    .stButton > button[data-testid="baseButton-secondary"]:focus {
+        background-color: #0d5aa7 !important;
+        border-color: #1f77b4 !important;
+        color: white !important;
+        box-shadow: none !important;
+    }
+    .profile-dropdown {
+        position: relative;
+        display: inline-block;
+    }
+    .dropdown-content {
+        background-color: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        padding: 8px;
+        margin-top: 8px;
+        min-width: 160px;
+    }
+    .dropdown-content .stButton > button {
+        width: 100% !important;
+        text-align: left !important;
+        border-radius: 4px !important;
+        margin-bottom: 4px !important;
+        background-color: transparent !important;
+        color: #333 !important;
+        border: none !important;
+        font-size: 14px !important;
+        padding: 8px 12px !important;
+        height: auto !important;
+        min-height: auto !important;
+    }
+    .dropdown-content .stButton > button:hover {
+        background-color: #f0f2f6 !important;
+        color: #1f77b4 !important;
+    }
+    .content-section {
+        background-color: #f8f9fa;
+        padding: 1.5rem;
+        border-radius: 10px;
+        margin: 1rem 0;
+        border: 1px solid #e9ecef;
+    }
+    .step-header {
+        color: #1f77b4;
+        font-weight: bold;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+# Helper functions
+def get_user_initials(name):
+    """Get user initials from full name."""
+    if not name:
+        return "U"
+    
+    words = name.strip().split()
+    if len(words) == 1:
+        return words[0][0].upper()
+    elif len(words) >= 2:
+        return (words[0][0] + words[-1][0]).upper()
+    else:
+        return "U"
 
 # Initialize session state
 def init_session_state():
@@ -83,6 +169,8 @@ def init_session_state():
         st.session_state.session_start_time = None
     if 'full_conversation_history' not in st.session_state:
         st.session_state.full_conversation_history = []
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "📚 Study Assistant"
 
 @st.cache_resource
 def initialize_services():
@@ -182,45 +270,69 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
     """Display main application interface."""
     user_info = st.session_state.user_info
     
-    # Sidebar
-    with st.sidebar:
-        st.markdown(f"""
-        <div class="user-info">
-            <h4>👤 {user_info['name']}</h4>
-            <p>📧 {user_info['email']}</p>
-            <p>🎓 {user_info['class_grade'].replace('class', 'Class ')}</p>
-        </div>
-        """, unsafe_allow_html=True)
+    # Profile header with dropdown
+    col1, col2 = st.columns([4, 1])
+    
+    with col1:
+        st.markdown('<h1 class="main-header">🎓 AI Educational Assistant</h1>', unsafe_allow_html=True)
+    
+    with col2:
+        # Profile dropdown
+        user_initials = get_user_initials(user_info['name'])
         
-        # Logout button
-        if st.button("🚪 Logout", use_container_width=True):
-            # Save conversation history before logout
-            if st.session_state.full_conversation_history:
-                with st.spinner("Saving conversation history..."):
-                    history_manager.save_session_history(
-                        user_id=st.session_state.user_id,
-                        session_id=st.session_state.session_id,
-                        conversations=st.session_state.full_conversation_history,
-                        start_time=st.session_state.session_start_time,
-                        end_time=datetime.now()
-                    )
+        # Create a container for the profile dropdown
+        profile_container = st.container()
+        
+        with profile_container:
+            # Profile avatar button
+            if st.button(user_initials, key="profile_avatar", help=f"Profile: {user_info['name']}"):
+                st.session_state.show_profile_dropdown = not st.session_state.get('show_profile_dropdown', False)
             
-            # Clear session state
-            st.session_state.authenticated = False
-            st.session_state.user_id = None
-            st.session_state.user_info = None
-            st.session_state.selected_subject = None
-            st.session_state.selected_textbooks = []
-            st.session_state.chat_history = []
-            st.session_state.full_conversation_history = []
-            st.session_state.session_id = None
-            st.session_state.session_start_time = None
-            st.rerun()
-        
-        st.divider()
-        
-        # Subject and Textbook Selection
-        st.subheader("📚 Content Selection")
+            # Profile dropdown menu
+            if st.session_state.get('show_profile_dropdown', False):
+                st.markdown('<div class="dropdown-content">', unsafe_allow_html=True)
+                if st.button("👤 Go to Profile", key="goto_profile", use_container_width=True):
+                    st.session_state.current_page = "👤 Profile"
+                    st.session_state.show_profile_dropdown = False
+                    st.rerun()
+                
+                if st.button("🚪 Logout", key="logout_btn", use_container_width=True):
+                    # Save conversation history before logout
+                    if st.session_state.full_conversation_history:
+                        with st.spinner("Saving conversation history..."):
+                            history_manager.save_session_history(
+                                user_id=st.session_state.user_id,
+                                session_id=st.session_state.session_id,
+                                conversations=st.session_state.full_conversation_history,
+                                start_time=st.session_state.session_start_time,
+                                end_time=datetime.now()
+                            )
+                    
+                    # Clear session state
+                    st.session_state.authenticated = False
+                    st.session_state.user_id = None
+                    st.session_state.user_info = None
+                    st.session_state.selected_subject = None
+                    st.session_state.selected_textbooks = []
+                    st.session_state.chat_history = []
+                    st.session_state.full_conversation_history = []
+                    st.session_state.session_id = None
+                    st.session_state.session_start_time = None
+                    st.session_state.current_page = "📚 Study Assistant"
+                    st.session_state.show_profile_dropdown = False
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Selection form in main content area
+    st.markdown("---")
+    col1, col2, col3 = st.columns([1, 1, 1])
+    
+    with col1:
+        st.subheader("1️⃣ Class")
+        st.info(f"Your class: **{user_info['class_grade'].replace('class', 'Class ')}**")
+    
+    with col2:
+        st.subheader("2️⃣ Select Subject")
         
         # Get available subjects for user's class
         subjects = user_manager.get_available_subjects(st.session_state.user_id)
@@ -236,86 +348,78 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
                 default_index = 0
             
             selected_subject_name = st.selectbox(
-                "Select Subject",
+                "Subject",
                 subject_names,
                 index=default_index,
-                key="subject_selector"
+                key="subject_selector",
+                label_visibility="collapsed"
             )
             
             # Find selected subject ID
             selected_subject = next(s for s in subjects if s['subject_name'] == selected_subject_name)
             
             # Save subject selection
-            if st.button("Save Subject Selection", use_container_width=True):
+            if st.button("💾 Save Subject", use_container_width=True):
                 if user_manager.select_subject(st.session_state.user_id, selected_subject['id']):
                     st.session_state.selected_subject = selected_subject
                     st.success("Subject selection saved!")
                     st.rerun()
                 else:
                     st.error("Failed to save subject selection")
-            
-            # Textbook selection (only if subject is selected)
-            current_selection = user_manager.db.get_user_subject_selection(st.session_state.user_id)
-            if current_selection:
-                st.divider()
-                st.subheader("📖 Select Textbooks")
-                
-                available_textbooks = user_manager.get_available_textbooks(st.session_state.user_id)
-                
-                if available_textbooks:
-                    # Create checkboxes for each textbook
-                    selected_ids = []
-                    for textbook in available_textbooks:
-                        if st.checkbox(
-                            textbook['book_name'],
-                            value=textbook['is_selected'],
-                            key=f"textbook_{textbook['id']}"
-                        ):
-                            selected_ids.append(textbook['id'])
-                    
-                    if st.button("Save Textbook Selection", use_container_width=True):
-                        if selected_ids:
-                            if user_manager.select_textbooks(st.session_state.user_id, selected_ids):
-                                st.success("Textbook selection saved!")
-                                st.rerun()
-                            else:
-                                st.error("Failed to save textbook selection")
-                        else:
-                            st.error("Please select at least one textbook")
-                else:
-                    st.info("No textbooks available for this subject")
         else:
             st.warning("No subjects available for your class")
-        
-        # Show current selection summary
-        st.divider()
-        st.subheader("📋 Current Selection")
-        summary = user_manager.get_selection_summary(st.session_state.user_id)
-        
-        if summary['subject']:
-            st.write(f"**Subject:** {summary['subject']}")
-            if summary['textbooks']:
-                st.write(f"**Textbooks:** {summary['textbook_count']}")
-                for book in summary['textbooks']:
-                    st.write(f"  - {book}")
-            else:
-                st.warning("No textbooks selected")
-        else:
-            st.warning("No subject selected")
     
-    # Main content area
-    st.markdown('<h1 class="main-header">🎓 AI Educational Assistant</h1>', unsafe_allow_html=True)
+    with col3:
+        st.subheader("3️⃣ Select Textbooks")
+        
+        # Textbook selection (only if subject is selected)
+        current_selection = user_manager.db.get_user_subject_selection(st.session_state.user_id)
+        if current_selection:
+            available_textbooks = user_manager.get_available_textbooks(st.session_state.user_id)
+            
+            if available_textbooks:
+                # Create checkboxes for each textbook
+                selected_ids = []
+                for textbook in available_textbooks:
+                    if st.checkbox(
+                        textbook['book_name'],
+                        value=textbook['is_selected'],
+                        key=f"textbook_{textbook['id']}"
+                    ):
+                        selected_ids.append(textbook['id'])
+                
+                if st.button("💾 Save Textbooks", use_container_width=True):
+                    if selected_ids:
+                        if user_manager.select_textbooks(st.session_state.user_id, selected_ids):
+                            st.success("Textbook selection saved!")
+                            st.rerun()
+                        else:
+                            st.error("Failed to save textbook selection")
+                    else:
+                        st.error("Please select at least one textbook")
+            else:
+                st.info("No textbooks available for this subject")
+        else:
+            st.info("Please select a subject first")
+    
+    st.markdown("---")
     
     # Validate selections before allowing questions
     validation = user_manager.validate_user_selections(st.session_state.user_id)
     
     if not validation['is_valid']:
-        st.error("⚠️ Please complete your selection before asking questions:")
+        st.markdown("""
+        <div style="background-color: #fff3cd; padding: 1.5rem; border-radius: 10px; border-left: 4px solid #ffc107; margin: 2rem 0;">
+            <h3 style="color: #856404; margin-bottom: 1rem;">⚠️ Complete Your Setup First</h3>
+            <p style="color: #856404; margin-bottom: 0;">Please complete all selections above before you can start asking questions.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
         for error in validation['errors']:
-            st.error(f"  • {error}")
+            st.error(f"• {error}")
         
         # Show example questions anyway
-        st.subheader("📝 Example Questions")
+        st.markdown("### 📝 Example Questions (Available After Setup)")
         example_questions = [
             "What is photosynthesis?",
             "Explain the water cycle",
@@ -334,8 +438,16 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
             for warning in validation['warnings']:
                 st.warning(f"⚠️ {warning}")
         
+        # Success message and question input
+        st.markdown("""
+        <div style="background-color: #d1ecf1; padding: 1.5rem; border-radius: 10px; border-left: 4px solid #17a2b8; margin: 2rem 0;">
+            <h3 style="color: #0c5460; margin-bottom: 1rem;">✅ Ready to Learn!</h3>
+            <p style="color: #0c5460; margin-bottom: 0;">All selections complete. You can now ask questions about your selected subjects and textbooks.</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
         # Question input
-        st.subheader("Ask Your Question")
+        st.markdown("### 💬 Ask Your Question")
         
         # Example questions based on selected subject
         with st.expander("💡 Example Questions"):
@@ -469,9 +581,62 @@ def main_app(auth_manager: AuthManager, user_manager: UserManager, content_manag
                     st.write(f"**Answer:** {chat['answer']}")
                     st.caption(f"Asked at: {chat['timestamp'].strftime('%Y-%m-%d %H:%M')}")
 
-def profile_page(auth_manager: AuthManager, user_manager: UserManager):
+def profile_page(auth_manager: AuthManager, user_manager: UserManager, history_manager: HistoryManager):
     """Display user profile page."""
-    st.markdown('<h1 class="main-header">👤 User Profile</h1>', unsafe_allow_html=True)
+    user_info = st.session_state.user_info
+    
+    # Profile header with dropdown (same as main app)
+    col1, col2 = st.columns([4, 1])
+    
+    with col1:
+        st.markdown('<h1 class="main-header">👤 User Profile</h1>', unsafe_allow_html=True)
+    
+    with col2:
+        # Profile dropdown
+        user_initials = get_user_initials(user_info['name'])
+        
+        # Create a container for the profile dropdown
+        profile_container = st.container()
+        
+        with profile_container:
+            # Profile avatar button
+            if st.button(user_initials, key="profile_avatar_profile", help=f"Profile: {user_info['name']}"):
+                st.session_state.show_profile_dropdown = not st.session_state.get('show_profile_dropdown', False)
+            
+            # Profile dropdown menu
+            if st.session_state.get('show_profile_dropdown', False):
+                st.markdown('<div class="dropdown-content">', unsafe_allow_html=True)
+                if st.button("📚 Go to Study Assistant", key="goto_study", use_container_width=True):
+                    st.session_state.current_page = "📚 Study Assistant"
+                    st.session_state.show_profile_dropdown = False
+                    st.rerun()
+                
+                if st.button("🚪 Logout", key="logout_btn_profile", use_container_width=True):
+                    # Save conversation history before logout
+                    if st.session_state.full_conversation_history:
+                        with st.spinner("Saving conversation history..."):
+                            history_manager.save_session_history(
+                                user_id=st.session_state.user_id,
+                                session_id=st.session_state.session_id,
+                                conversations=st.session_state.full_conversation_history,
+                                start_time=st.session_state.session_start_time,
+                                end_time=datetime.now()
+                            )
+                    
+                    # Clear session state
+                    st.session_state.authenticated = False
+                    st.session_state.user_id = None
+                    st.session_state.user_info = None
+                    st.session_state.selected_subject = None
+                    st.session_state.selected_textbooks = []
+                    st.session_state.chat_history = []
+                    st.session_state.full_conversation_history = []
+                    st.session_state.session_id = None
+                    st.session_state.session_start_time = None
+                    st.session_state.current_page = "📚 Study Assistant"
+                    st.session_state.show_profile_dropdown = False
+                    st.rerun()
+                st.markdown('</div>', unsafe_allow_html=True)
     
     user_info = auth_manager.get_user_info(st.session_state.user_id)
     
@@ -554,19 +719,11 @@ def main():
     if not st.session_state.authenticated:
         login_page(auth_manager)
     else:
-        # Create navigation
-        pages = {
-            "📚 Study Assistant": lambda: main_app(auth_manager, user_manager, content_manager, assistant, history_manager),
-            "👤 Profile": lambda: profile_page(auth_manager, user_manager)
-        }
-        
-        # Add navigation to sidebar
-        with st.sidebar:
-            st.title("Navigation")
-            selection = st.radio("Go to", list(pages.keys()))
-        
-        # Display selected page
-        pages[selection]()
+        # Display current page based on session state
+        if st.session_state.current_page == "📚 Study Assistant":
+            main_app(auth_manager, user_manager, content_manager, assistant, history_manager)
+        elif st.session_state.current_page == "👤 Profile":
+            profile_page(auth_manager, user_manager, history_manager)
 
 if __name__ == "__main__":
     main()
